@@ -5,64 +5,65 @@ Adapted by Gerard
 """
 import logging as log
 import os
-from argparse import ArgumentParser
-from collections import OrderedDict
+import json
+import time
+import datetime
+import tempfile
+from functools import wraps
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torchvision.transforms as transforms
-from torch import optim
-from torch.utils.data import DataLoader
-from torch.utils.data.distributed import DistributedSampler
-from torchvision.datasets import MNIST
+from torchvision.utils import make_grid
+from torchvision.transforms.functional import to_pil_image
 
 import pytorch_lightning as pl
+from pytorch_lightning.logging import MLFlowLogger
 
-# import mlflow
-# import mlflow.pytorch
+import segmentation_transforms as TT
+from models import get_model
 
-import input_target_transforms as TT
-import distributed_utils
+from datasets import GameLevelsDataset, get_dataset, dataset_mean_std, get_stats
 
-# from faim_mlflow import get_run_manager
-from ml_args import parse_args
-from models import get_model, UNetAuto
+def rank_zero_only(fn):
+    """Decorate a method to run it only on the process with logger rank 0.
 
-from datasets import GameImagesDataset, GameFoldersDataset, OverfitDataset, get_dataset
+    :param fn: Function to decorate
+    """
 
+    @wraps(fn)
+    def wrapped_fn(self, *args, **kwargs):
+        if self.logger is not None and self.logger.rank == 0:
+            fn(self, *args, **kwargs)
+
+    return wrapped_fn
 
 class AffordanceUnetLightning(pl.LightningModule):
     """
-    Unet Auto Encoder models with pytorch lightning
+    Unet Auto Encoder models training with pytorch lightning
     """
 
     def __init__(self, hparams):
         """
-        Pass in parsed HyperOptArgumentParser to the model
+        Pass in parsed hyperparams to the model, initialize Lighning superclass
         :param hparams:
         """
-        # init superclass
         super(AffordanceUnetLightning, self).__init__()
         self.hparams = hparams
-
-        self.batch_size = hparams.batch_size
-
         self.dataset = None
-        # build model
-        self.net = UNetAuto(num_out_channels=10, max_features=1024)
-    # ---------------------
-    # TRAINING
-    # ---------------------
+        self.net = get_model(hparams.model)
 
     def forward(self, x):
         """
-        Based on model choice
+        Based on model choice. Could include Linear and Convolutional Layers here
         :param x:
         :return:
         """
         return self.net.forward(x)
 
+    # ---------------------
+    # TRAINING
+    # ---------------------
     def loss(self, targets, segmentations):
         """
         Combines sigmoid with Binary Cross Entropy for numerical stability.
@@ -77,20 +78,80 @@ class AffordanceUnetLightning(pl.LightningModule):
         """
         Lightning calls this inside the training loop
         :param batch:
-        :return:
+        :return: dict
+            - loss -> tensor scalar [REQUIRED]
+            - progress_bar -> Dict for progress bar display. Must have only tensors
+            - log -> Dict of metrics to add to logger. Must have only tensors (no images, etc)
         """
         # forward pass
         images, targets = batch
         predictions = self.forward(images)
         # calculate loss
         loss_val = self.loss(targets, predictions)
-
+        to_log = {'training_loss': loss_val}
         output = {
             'loss': loss_val,  # required
-            'progress_bar': {'training_loss': loss_val},
+            'progress_bar': to_log,
+            'log': to_log,
         }
         return output
+    
+    # TODO investigate full batch loss. Lets all distributed batches come together easily
+    # def training_end(self, train_step_outputs):
 
+    @rank_zero_only
+    def on_epoch_end(self):
+        curr_device = next(self.net.parameters()).get_device()
+        viz_idxs = [0,1,2]
+        viz_inputs = []
+        for idx in viz_idxs:
+            image, target = self.val_dataset[idx]
+            image, target = image.unsqueeze(0), target.unsqueeze(0)
+            model_output = self.forward(image.to(curr_device))
+            # reconstruction = TT.img_norm(model_output)
+            viz_inputs.append(image)
+            viz_inputs.append(model_output.cpu())
+            viz_inputs.append(target)
+
+        img_grid = make_grid(torch.cat(viz_inputs), nrow=3, padding=40, normalize=True)
+        pil_grid = to_pil_image(img_grid)
+        # log.info(img_grid.shape, torch.cat(viz_inputs).shape)
+        filename = f"globalstep_{self.global_step:05d}_sample_outputs"
+        with tempfile.NamedTemporaryFile(prefix=filename, suffix='.png') as filepath:
+            pil_grid.save(filepath)
+            self.logger.experiment.log_artifact(self.logger.run_id, filepath.name, 'eval_images')
+
+
+    @rank_zero_only
+    def on_train_end(self):
+        args = self.hparams
+        total_time = time.time() - self.start_time
+        total_seconds = int(total_time)
+        total_time_str = str(datetime.timedelta(seconds=int(total_time)))
+
+        log.info('Training time {}'.format(total_time_str))
+        param_dict = {
+            'epochs': args.epochs,
+            'num_samples': len(self.dataset),
+            'batch_size': args.batch_size,
+            'lr_start': args.lr,
+            'momentum': args.momentum,
+            'weight_decay': args.weight_decay,
+            'distributed': 'None' if args.gpus == '' else args.backend,
+            'gpus': 'None' if args.gpus == '' else args.gpus,
+            'world_size': args.world_size,
+            'train_time': total_time_str,
+            'train_seconds': total_seconds,
+        }
+
+        log.info(json.dumps(param_dict, indent=2, sort_keys=True))
+        for key, val in param_dict.items():
+            self.logger.experiment.log_param(self.logger.run_id, key, val)
+
+    # ---------------------
+    # VALIDATION LOOP
+    # ---------------------
+    
     def validation_step(self, batch, batch_idx):
         """
         Called in validation loop with model in eval mode
@@ -98,14 +159,26 @@ class AffordanceUnetLightning(pl.LightningModule):
         images, targets = batch
         predictions = self.forward(images)
         loss_val = self.loss(targets, predictions)
-        return {'val_loss': loss_val}
+        to_log = {'val_loss': loss_val}
+        output = {
+            'val_loss': loss_val,
+            'progress_bar': to_log,
+        }
+        return output
 
-    def validation_end(self, outputs):
-        val_losses = torch.stack([x['val_loss'] for x in outputs])
+    def validation_end(self, val_step_outputs):
+        log.info('Val end')
+        val_losses = torch.stack([x['val_loss'] for x in val_step_outputs])
+        
         avg_loss = val_losses.mean()
         max_loss = val_losses.max()
-        return {'avg_val_loss': avg_loss,
+        to_log = {'val_loss': avg_loss,
                 'max_val_loss': max_loss}
+        output = {
+            'log': to_log
+        }
+        return output
+        
 
     # ---------------------
     # TRAINING SETUP
@@ -124,20 +197,70 @@ class AffordanceUnetLightning(pl.LightningModule):
             momentum=args.momentum, weight_decay=args.weight_decay
         )
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer,
-            factor=0.1,)
+            factor=0.1)
         return [optimizer], [scheduler]
+
+    @rank_zero_only
+    def on_train_start(self):
+        self.start_time = time.time()
+        # Add a training image and it's target to tensorboard
+        rand_select = torch.randint(0, len(self.dataset), (6,)).tolist()
+        train_images = []
+        for idx in rand_select:
+            data = self.dataset[idx]
+            image, target = data.image, data.target
+
+            train_images.append(image)
+            train_images.append(target)
+
+        img_grid = make_grid(
+            train_images, nrow=6, padding=40, normalize=True)
+        log.info(f"image grid shape : {img_grid.shape}, {type(img_grid)}")
+        pil_grid = to_pil_image(img_grid)
+        with tempfile.NamedTemporaryFile(prefix='sample_', suffix='.png') as filepath:
+            pil_grid.save(filepath)
+            self.logger.experiment.log_artifact(self.logger.run_id, filepath.name, 'pre_training')
+
+    #Default mean and std are from super mario bros images
+    def configure_transforms(self, mean=TT.DEFAULT_MEAN, std=TT.DEFAULT_STD):
+        if self.hparams.center_inpaint:
+            train_transform = TT.get_inpaint_transform(
+                train=True, mean=mean, std=std, cutout_pixels=60)
+            val_transform = TT.get_inpaint_transform(
+                train=False, mean=mean, std=std, cutout_pixels=60)
+        if self.hparams.noise:
+            train_transform = TT.get_noisy_transform(
+                train=True, mean=mean, std=std, noise_mean=0.0, noise_std=1.0)
+            val_transform = TT.get_noisy_transform(
+                train=False, mean=mean, std=std, noise_mean=0.0, noise_std=1.0)
+        else:
+            train_flag = not args.no_augmentation
+            train_transform = TT.get_transform(
+                train=train_flag, mean=mean, std=std)
+            val_transform = TT.get_transform(
+                train=False, mean=mean, std=std)
+        return train_transform, val_transform
 
     def load_full_dataset(self):
         if self.dataset is None:
-            train_transform = (TT.get_transform(
-                train=True, inpaint=False, noise=False))
-            val_transform = (TT.get_transform(
-                train=False, inpaint=False, noise=False))
+            # Dataset Mean and Std
+            if self.hparams.dataset_mean:
+                log.info('Calculating dataset mean')
+                temp_ds = get_dataset(
+                    self.hparams.dataset, transform=TT.ToTensor())
+                self.mean, self.std = dataset_mean_std(temp_ds)
+            else:
+                # Fetch stats based on dataset, defaults to super mario bros if not found
+                self.mean, self.std = get_stats(self.hparams.dataset)
+            log.info(f"Dataset mean: {self.mean}, std: {self.std}")
+            # Dataset Augmentations
+            train_transform, val_transform = self.configure_transforms(mean=self.mean, std=self.std)
+
             self.dataset = get_dataset(
-                self.hparams.dataset, 'train', transform=train_transform)
+                self.hparams.dataset, transform=train_transform)
 
             self.val_dataset = get_dataset(
-                self.hparams.dataset, 'val', transform=val_transform)
+                self.hparams.dataset, transform=val_transform)
 
             num_samples = len(self.dataset)
             num_train = int(0.8 * num_samples)
@@ -152,12 +275,16 @@ class AffordanceUnetLightning(pl.LightningModule):
             log.info(
                 f'Train {len(self.dataset)} and Val {len(self.val_dataset)} splits made')
 
-            # print(self.train_split.transform)
-            # print(self.val_split.transform)
-            # x, y = self.train_split[0]
-            # print(type(x), type(y))
-            # z, p = self.train_split.transform(x, y)
-            # print(type(z), type(p))
+            # Distributed Data Parallel mode chunks the dataset so that each worker does equal work but doesn't do extra work
+            if self.use_ddp:
+                self.train_sampler = torch.utils.data.distributed.DistributedSampler(
+                    self.dataset)
+                self.val_sampler = torch.utils.data.distributed.DistributedSampler(
+                    self.val_dataset)
+            else:
+                self.train_sampler = torch.utils.data.RandomSampler(self.dataset)
+                self.val_sampler = torch.utils.data.SequentialSampler(self.val_dataset)
+
 
     @pl.data_loader
     def train_dataloader(self):
@@ -166,13 +293,18 @@ class AffordanceUnetLightning(pl.LightningModule):
         """
         log.info('Training data loader called.')
         self.load_full_dataset()
-        return torch.utils.data.DataLoader(self.dataset, batch_size=self.hparams.batch_size, drop_last=True)
+        return torch.utils.data.DataLoader(self.dataset, sampler=self.train_sampler, 
+            batch_size=self.hparams.batch_size, drop_last=True)
 
     @pl.data_loader
     def val_dataloader(self):
+        """
+        Optional
+        """
         log.info('Validation data loader called.')
         self.load_full_dataset()
-        return torch.utils.data.DataLoader(self.val_dataset, batch_size=self.hparams.batch_size, drop_last=False)
+        return torch.utils.data.DataLoader(self.val_dataset, sampler=self.val_sampler, 
+            batch_size=self.hparams.batch_size, drop_last=False)
 
     # @pl.data_loader
     # def test_dataloader(self):
@@ -184,11 +316,41 @@ def main(args):
     # init module
     model = AffordanceUnetLightning(args)
 
-    # most basic trainer, uses good defaults
+    use_gpu = None if args.gpus == '' else args.gpus
+    distributed_backend = None if args.gpus == '' else args.backend
+    
+    if args.do_log:
+        #TODO non ultra64 tracking use https://ultra64.cs.pomona.edu/mlflow/
+        os.environ['MLFLOW_TRACKING_USERNAME'] = 'username'
+        os.environ['MLFLOW_TRACKING_PASSWORD'] = 'password'
+        mlflow_tracking_uri = 'file:///faim/mlflow/mlruns/'
+        logger = MLFlowLogger(experiment_name=args.experiment, tracking_uri=mlflow_tracking_uri)
+        # Instantiates experiment if it didn't exist
+        run_id = logger.run_id
+        exp_id = logger.experiment.get_experiment_by_name(args.experiment).experiment_id
+        artifact_location = f'/faim/mlflow/mlruns/{exp_id}/{run_id}/artifacts'
+    else:
+        artifact_location = './artifacts'
+        logger = False
+    log.info(f'saving artifacts to {artifact_location}')
+    checkpoint_callback = pl.callbacks.ModelCheckpoint(
+                        filepath=artifact_location,
+                        save_top_k=1,
+                        verbose=True,
+                        monitor='val_loss',
+                        mode='min',
+                        prefix=args.model
+                    )
+
     trainer = pl.Trainer(
-        max_nb_epochs=args.epochs,
-        gpus=None if args.gpus == '' else args.gpus,
+        logger=logger,
+        max_epochs=args.epochs,
+        gpus=use_gpu,
+        distributed_backend=distributed_backend,
         num_nodes=args.world_size,
+        checkpoint_callback=checkpoint_callback,
+        accumulate_grad_batches=args.accumulations,
+        fast_dev_run=args.fast_run,
     )
     trainer.fit(model)
 
