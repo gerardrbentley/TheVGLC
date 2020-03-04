@@ -1,0 +1,22 @@
+{
+	"tiles" : {
+        "@" : {},
+        "-" : {"permeable":1.0},
+        "#" : {"solid":1.0},
+        "B" : {"solid":1.0,"destroyable":0.5},
+        "H" : {"solid":1.0, "dangerous":1.0},
+        "|" : {"solid":0.5, "permeable":1.0},
+        "L" : {"permeable":1.0, "gettable":1.0, "usable":1.0},
+        "l" : {"permeable":1.0, "gettable":1.0, "usable":1.0},
+        "W" : {"permeable":1.0, "gettable":1.0, "usable":1.0},
+        "w" : {"permeable":1.0, "gettable":1.0, "usable":1.0},
+        "+" : {"permeable":1.0, "gettable":1.0, "usable":1.0},
+        "*" : {"permeable":1.0, "gettable":1.0, "usable":1.0},
+        "U" : {"permeable":1.0, "gettable":1.0, "usable":1.0},
+        "M" : {"solid":1.0, "movable":1.0, "changeable":1.0},
+        "P" : {"movable":1.0, "destroyable":1.0},
+        "C" : {"solid":1.0, "dangerous":1.0},
+        "D" : {"solid":1.0, "changeable":1.0, "usable":1.0, "destroyable":1.0},
+        "t" : {"permeable":0.5, "portal":0.5}
+    }
+}

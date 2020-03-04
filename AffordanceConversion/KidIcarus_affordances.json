@@ -1,0 +1,10 @@
+{
+    "tiles" : {
+        "#" : {"solid": 1.0},
+        "-" : {"permeable":1.0},
+        "D" : {"solid":1.0,"usable":1.0,"portal":1.0},
+        "H" : {"solid":1.0,"dangerous":1.0},
+        "M" : {"solid":0.5,"permeable":1.0,"movable":1.0},
+        "T" : {"solid":0.5,"permeable":1.0}
+    }
+}
