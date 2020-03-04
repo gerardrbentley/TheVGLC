@@ -1,0 +1,17 @@
+{
+    "tiles" : {
+        "X" : {"solid": 1.0},
+        "S" : {"destroyable": 0.5, "solid":1.0},
+        "-" : {"permeable": 1.0},
+        "?" : {"changeable": 1.0,"solid": 1.0,"usable": 1.0},
+        "Q" : {"solid":1.0},
+        "E" : {"dangerous":1.0,"destroyable":1.0, "movable":1.0},
+        "<" : {"solid": 1.0,"portal":0.5},
+        ">" : {"solid":1.0,"portal":0.5},
+        "[" : {"solid":1.0},
+        "]" : {"solid":1.0},
+        "o" : {"gettable":1.0, "usable":1.0},
+        "B" : {"solid":1.0},
+        "b" : {"solid":1.0}
+    }
+}
