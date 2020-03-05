@@ -42,6 +42,31 @@ def rank_zero_only(fn):
 
     return wrapped_fn
 
+def get_normed_map(affordance, full_affordance_map, opt_affordance_map=None):
+    """
+    Gets affordance map normalized to range 0.0 - 1.0 and converted to 3 channel image for compatibility
+    
+    :param: affordance string name of affordance to get map for
+    :param: full_affordance_map a tensor of shape (Batch x 9 x Height x Width)
+    :param: opt_affordance_map a tensor of shape (Batch x 9 x Height x Width) or none
+
+    :returns: tensor of shape (Batch x 3 x Height x Width). Returns tuple of two tensors if opt_affordance_map is used
+    """
+    split_affordances = torch.unbind(full_affordance_map, dim=1)
+    single_map = split_affordances[AFFORDANCES.index(affordance)]
+    single_map = torch.stack((single_map, single_map, single_map), dim=1)
+    single_map = TT.img_norm(single_map, range=(0.0, 1.0))
+    if opt_affordance_map is None:
+        return single_map
+    else:
+        other_affordances = torch.unbind(opt_affordance_map, dim=1)
+        other_map = other_affordances[AFFORDANCES.index(affordance)]
+        other_map = torch.stack((other_map, other_map, other_map), dim=1)
+        other_map = TT.img_norm(other_map, range=(0.0, 1.0))
+        return single_map, other_map
+
+    
+
 class AffordanceUnetLightning(pl.LightningModule):
     """
     Unet Auto Encoder models training with pytorch lightning
@@ -102,36 +127,6 @@ class AffordanceUnetLightning(pl.LightningModule):
     
     # TODO investigate full batch loss. Lets all distributed batches come together easily
     # def training_end(self, train_step_outputs):
-
-    @rank_zero_only
-    def on_epoch_end(self):
-        curr_device = next(self.net.parameters()).get_device()
-        viz_idxs = [0,1,2]
-        viz_inputs = []
-        for idx in viz_idxs:
-            image, target = self.val_dataset[idx]
-            image, target = image.unsqueeze(0), target.unsqueeze(0)
-            model_output = self.forward(image.to(curr_device))
-
-            image = TT.img_norm(image)
-            viz_inputs.append(image)
-
-            all_affordances = torch.unbind(model_output, dim=1)
-            solid_map = all_affordances[AFFORDANCES.index('solid')]
-            solid_map = torch.stack((solid_map, solid_map, solid_map), dim=1)
-            solid_map = TT.img_norm(solid_map, range=(0.0, 1.0))
-            viz_inputs.append(solid_map.cpu())
-            # log.info(f"solid map: {solid_map.min()}, {solid_map.max()}, {torch.unique(solid_map)}")
-            # viz_inputs.append(target)
-
-        img_grid = make_grid(torch.cat(viz_inputs), nrow=2, padding=40)
-        pil_grid = to_pil_image(img_grid)
-        # log.info(img_grid.shape, torch.cat(viz_inputs).shape)
-        filename = f"globalstep_{self.global_step:05d}_sample_outputs"
-        with tempfile.NamedTemporaryFile(prefix=filename, suffix='.png') as filepath:
-            pil_grid.save(filepath)
-            self.logger.experiment.log_artifact(self.logger.run_id, filepath.name, 'eval_images')
-
 
     @rank_zero_only
     def on_train_end(self):
@@ -216,28 +211,56 @@ class AffordanceUnetLightning(pl.LightningModule):
     def on_train_start(self):
         self.start_time = time.time()
         # Add a training image and it's target to tensorboard
-        rand_select = torch.randint(0, len(self.dataset), (6,)).tolist()
-        train_images = []
-        for idx in rand_select:
-            data = self.dataset[idx]
-            image, target = data.image, data.target
-            
-            image = TT.img_norm(image)
-            train_images.append(image)
-            all_affordances = torch.unbind(target, dim=0)
-            solid_map = all_affordances[AFFORDANCES.index('solid')]
-            solid_map = torch.stack((solid_map, solid_map, solid_map), dim=0)
-            solid_map = TT.img_norm(solid_map, range=(0.0,1.0))
-            train_images.append(solid_map.float())
-            # train_images.append(target)
+        viz_idxs = torch.randint(0, len(self.dataset), (8,)).tolist()
 
-        img_grid = make_grid(
-            train_images, nrow=6, padding=20)
-        log.info(f"image grid shape : {img_grid.shape}, {type(img_grid)}")
+        input_images = []
+        target_list = []
+        for idx in viz_idxs:
+            image, target = self.dataset[idx]
+            input_images.append(TT.img_norm(image))
+            target_list.append(target)
+        viz_inputs = torch.stack(input_images)
+        targets = torch.stack(target_list)
+        target_solid = get_normed_map('solid', targets)
+        target_danger = get_normed_map('dangerous', targets)
+
+        img_grid = make_grid(torch.cat([viz_inputs, target_solid, target_danger]), nrow=len(viz_idxs), padding=20)
+        # log.info(f"image grid shape : {img_grid.shape}, {type(img_grid)}")
         pil_grid = to_pil_image(img_grid)
         with tempfile.NamedTemporaryFile(prefix='sample_', suffix='.png') as filepath:
             pil_grid.save(filepath)
             self.logger.experiment.log_artifact(self.logger.run_id, filepath.name, 'pre_training')
+
+    @rank_zero_only
+    def on_epoch_end(self):
+        curr_device = next(self.net.parameters()).get_device()
+        viz_idxs = list(range(8))
+
+        input_images = []
+        target_list = []
+        for idx in viz_idxs:
+            image, target = self.val_dataset[idx]
+            input_images.append(image)
+            target_list.append(target)
+        model_inputs = torch.stack(input_images, dim=0)
+        input_images = [TT.img_norm(image) for image in input_images]
+        viz_inputs = torch.stack(input_images, dim=0)
+
+        model_outputs = self.forward(model_inputs.to(curr_device))
+        model_outputs = model_outputs.cpu()
+        
+        targets = torch.stack(target_list, dim=0)
+        pred_solid, target_solid = get_normed_map('solid', model_outputs, targets)
+        pred_danger, target_danger = get_normed_map('dangerous', model_outputs, targets)
+
+        img_grid = make_grid(torch.cat([viz_inputs, pred_solid, target_solid, pred_danger, target_danger]), nrow=len(viz_idxs), padding=20)
+        pil_grid = to_pil_image(img_grid)
+        # log.info(img_grid.shape, torch.cat(viz_inputs).shape)
+        filename = f"globalstep_{self.global_step:05d}_sample_outputs"
+        with tempfile.NamedTemporaryFile(prefix=filename, suffix='.png') as filepath:
+            pil_grid.save(filepath)
+            self.logger.experiment.log_artifact(self.logger.run_id, filepath.name, 'eval_images')
+
 
     #Default mean and std are from super mario bros images
     def configure_transforms(self, mean=TT.DEFAULT_MEAN, std=TT.DEFAULT_STD):
@@ -343,7 +366,7 @@ def main(args):
     log.info(f'saving artifacts to {artifact_location}')
     checkpoint_callback = pl.callbacks.ModelCheckpoint(
                         filepath=artifact_location,
-                        save_top_k=1,
+                        save_top_k=2,
                         verbose=True,
                         monitor='val_loss',
                         mode='min',
@@ -352,7 +375,6 @@ def main(args):
 
     trainer = pl.Trainer(
         logger=logger,
-        max_epochs=args.epochs,
         gpus=use_gpu,
         distributed_backend=distributed_backend,
         num_nodes=args.world_size,

@@ -57,7 +57,7 @@ def main(args):
 
         height = num_rows * grid_size
         width = num_cols * grid_size
-        affordance_map = np.zeros((height, width, len(AFFORDANCES)), dtype=np.float)
+        affordance_map = np.zeros((height, width, len(AFFORDANCES)), dtype=np.float32)
 
         buckets = np.zeros(len(AFFORDANCES))
         seen_chars = []

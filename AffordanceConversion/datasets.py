@@ -106,7 +106,8 @@ class AffordanceImagesDataset(torch.utils.data.Dataset):
 
 def get_dataset(name, transform):
     paths = {
-        "mm": ('./MM/', GameLevelsDataset),
+        "mm": ('./PreprocessedMM/', GameLevelsDataset),
+        "ki": ('./PreprocessedKI/', AffordanceImagesDataset),
         "test": ('./TST/', GameLevelsDataset),
         "preprocessed": ('./Preprocessed', AffordanceImagesDataset)
     }
@@ -118,7 +119,8 @@ def get_dataset(name, transform):
 def get_stats(name):
     datasets = {
         "smb": ([0.3711, 0.3652, 0.5469],[0.2973, 0.2772, 0.4554]),
-        "mm": ([0.3572203516960144, 0.5261361598968506, 0.533509373664856], [0.4059096872806549, 0.3465479016304016, 0.384729266166687])
+        "mm": ([0.3572203516960144, 0.49511203169822693, 0.48756858706474304], [0.40853098034858704, 0.34678202867507935, 0.3877756893634796]),
+        "ki": ([0.10148724168539047, 0.09331925213336945, 0.09857229888439178], [0.24229216575622559, 0.20167399942874908, 0.21721825003623962])
     }
     try: 
         return datasets[name]
@@ -159,22 +161,23 @@ def dataset_mean_std(dataset):
 
 if __name__ == "__main__":
 
-    print('test Game Level Dataset')    
-    trainset = get_dataset("mm", transform=None)
+    print('Preprocess KI Game Level Dataset')    
+    trainset = GameLevelsDataset("./KI", transform=None, preprocess=True)
     print(type(trainset))
     print(f'len trainset: {len(trainset)}')
     data = trainset[1]
     # data['image'].show()
     image = data.image
     target = data.target
-
+    print(f'--------------------------------------')
     print(f'Image and Target with Transform = None')
     print(f'types: {type(image)}, {type(target)}')
     print(f'shapes: {(image.size)}, {(target.shape)}')
     print(f'extrema: [{image.getextrema()}], [{target.min()}, {target.max()}]')
 
+    print(f'--------------------------------------')
     # CHECK MEAN AND STD
-    tensorset = get_dataset("mm", transform=TT.ToTensor())
+    tensorset = get_dataset("ki", transform=TT.ToTensor())
     test_image = tensorset[0].image
     c,h,w = test_image.shape
     # print(f"c: {c}, h: {h}, w: {w}")
@@ -183,8 +186,9 @@ if __name__ == "__main__":
     print(f"test mean: {torch.mean(lin_image, 1)}")
     print(f"test std: {torch.std(lin_image, 1)}")
     mean, std = dataset_mean_std(tensorset)
-    print(f"mm dataset mean: {mean}, std: {std}")
+    print(f"ki dataset (mean, std): ({mean}, {std})")
     
+    print(f'--------------------------------------')
     # smb = get_dataset("smb", transform=TT.ToTensor())
     # smb_mean, smb_std = dataset_mean_std(smb)
     # print(f"smb dataset smb_mean: {smb_mean}, smb_std: {smb_std}")
@@ -193,10 +197,12 @@ if __name__ == "__main__":
     image_tensor, target_tensor = TT.ToTensor()(image, target)
 
     print(f'Image and Target with Transform = ToTensor')
+    print(f'dtypes: {(image_tensor.dtype)}, {(target_tensor.dtype)}')
     print(f'types: {type(image_tensor)}, {type(target_tensor)}')
     print(f'shapes: {(image_tensor.shape)}, {(target_tensor.shape)}')
     # print(f'extrema: [{image_tensor.getextrema()}], [{target_tensor.getextrema()}]')
 
+    print(f'--------------------------------------')
     do_transforms = TT.get_transform(False)
     image, target = do_transforms(image, target)
 
@@ -205,13 +211,31 @@ if __name__ == "__main__":
     print(f'Image and Target post Batching')
     print(f'shapes: {(image.shape)}, {(target.shape)}')
 
+    print(f'--------------------------------------')
     image = image.detach().cpu()
     target = target.detach().cpu()
-
+    image = TT.img_norm(image)
+    target = TT.img_norm(target, range=(0.0,1.0))
     print(f'Image and Target post detach, cpu for viz')
+    print(f'dtypes: {(image.dtype)}, {(target.dtype)}')
     print(f'types: {type(image)}, {type(target)}')
     print(f'shapes: {(image.shape)}, {(target.shape)}')
     print(
         f'ranges: [{image.min()} - {image.max()}], [{target.min()} - {target.max()}]')
 
+    print(f'--------------------------------------')
+    preproc = get_dataset('preprocessed', transform=TT.ToTensor())
+    print(type(preproc))
+    print(f'len preproc: {len(preproc)}')
+    data = preproc[1]
+    # data['image'].show()
+    image = data.image
+    target = data.target
+
+    print(f'Pre processed image and target with ToTensor')
+    print(f'dtypes: {(image.dtype)}, {(target.dtype)}')
+    print(f'types: {type(image)}, {type(target)}')
+    print(f'shapes: {(image.shape)}, {(target.shape)}')
+    print(f'extrema: [{image.min()}, {image.max()}], [{target.min()}, {target.max()}]')
     # visualize_outputs(image, titles=['Image'])
+    print(f'--------------------------------------')

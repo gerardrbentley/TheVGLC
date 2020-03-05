@@ -17,6 +17,6 @@
         "P" : {"movable":1.0, "destroyable":1.0},
         "C" : {"solid":1.0, "dangerous":1.0},
         "D" : {"solid":1.0, "changeable":1.0, "usable":1.0, "destroyable":1.0},
-        "t" : {"solid":0.5, "portal":0.5}
+        "t" : {"solid":1.0}
     }
 }
