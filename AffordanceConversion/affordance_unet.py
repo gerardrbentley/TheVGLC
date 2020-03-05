@@ -21,9 +21,12 @@ import pytorch_lightning as pl
 from pytorch_lightning.logging import MLFlowLogger
 
 import segmentation_transforms as TT
-from models import get_model
+from models import get_model, UNetAuto
 
 from datasets import GameLevelsDataset, get_dataset, dataset_mean_std, get_stats
+
+AFFORDANCES = ["changeable", "dangerous", "destroyable", "gettable", "movable", 
+        "portal", "solid", "ui", "usable"]
 
 def rank_zero_only(fn):
     """Decorate a method to run it only on the process with logger rank 0.
@@ -51,7 +54,7 @@ class AffordanceUnetLightning(pl.LightningModule):
         super(AffordanceUnetLightning, self).__init__()
         self.hparams = hparams
         self.dataset = None
-        self.net = get_model(hparams.model)
+        self.net = UNetAuto(num_out_channels=len(AFFORDANCES), max_features=1024)
 
     def forward(self, x):
         """

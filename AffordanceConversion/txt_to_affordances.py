@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap, BoundaryNorm
 
 AFFORDANCES = ["changeable", "dangerous", "destroyable", "gettable", "movable", 
-        "permeable", "portal", "solid", "ui", "usable"]
+        "portal", "solid", "ui", "usable"]
 
 def main(args):
     """
@@ -104,15 +104,8 @@ def visualize(affordance_map, filename, only_solid_permeable=False):
         plt.tight_layout()
         plt.show()
     else:
-        fig, axeslist = plt.subplots(ncols=2, nrows=1)
-        fig.suptitle(filename)
-        axeslist.ravel()[0].imshow(affordance_map[:,:,AFFORDANCES.index('solid')], cmap=cmap, norm=norm, interpolation='nearest')
-        axeslist.ravel()[0].set_title('solid')
-        axeslist.ravel()[0].set_axis_off()
-        axeslist.ravel()[1].imshow(affordance_map[:,:,AFFORDANCES.index('permeable')], cmap=cmap, norm=norm, interpolation='nearest')
-        axeslist.ravel()[1].set_title('permeable')
-        axeslist.ravel()[1].set_axis_off()
-        plt.tight_layout()
+        fig = plt.figure('solid')
+        plt.imshow(affordance_map[:,:,AFFORDANCES.index('solid')], cmap=cmap, norm=norm, interpolation='nearest')
         plt.show()
 
 def parse_args():

@@ -22,9 +22,18 @@ class GameLevelsDataset(torch.utils.data.Dataset):
             print('No BMP images found, trying PNG')
             self.image_list = glob.glob(f'{self.image_dir}/*.png')
         
+        self.data = []
         TARGET_SIZE = 224
         for filename in self.image_list:
             image = Image.open(filename).convert('RGB')
+            
+            affordance_map = np.load()
+            width, height = image.size
+            rows = int(height // TARGET_SIZE)
+            cols = int(width // TARGET_SIZE)
+            for (r,c) in [(r,c) for r in range(rows) for c in range(cols))]:
+                small_image = image.crop(box=(c, r, c + TARGET_SIZE, r + TARGET_SIZE))
+
 
         # self.image_folders = next(os.walk(self.image_dir))[1]
         self.length = len(self.image_list)
