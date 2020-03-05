@@ -213,7 +213,12 @@ class Normalize(object):
         return image, target
 
 
-def img_norm(image):
+def img_norm(image, range=None):
+    """
+    Returns image normalized to its own min and max or a given range
+
+    :param: range a tuple of floats (min,max) or None 
+    """
     image = image.clone()
 
     def norm_ip(img, min, max):
@@ -225,7 +230,7 @@ def img_norm(image):
             norm_ip(t, range[0], range[1])
         else:
             norm_ip(t, float(t.min()), float(t.max()))
-    norm_range(image, None)
+    norm_range(image, range)
     return image
 
 

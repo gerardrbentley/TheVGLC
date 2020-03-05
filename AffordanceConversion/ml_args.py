@@ -6,7 +6,7 @@ def parse_args(get_parser=False):
         description='Game Image AutoEncoder Training')
 
     # Data and Model
-    parser.add_argument('-d', '--dataset', default='mm', help='dataset')
+    parser.add_argument('-d', '--dataset', default='preprocessed', help='dataset')
     parser.add_argument('-m', '--model', default='unet1024', help='model')
     parser.add_argument('--device', default='cuda', help='device')
     parser.add_argument('-j', '--workers', default=16, type=int, metavar='N',

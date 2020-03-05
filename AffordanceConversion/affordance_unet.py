@@ -119,7 +119,7 @@ class AffordanceUnetLightning(pl.LightningModule):
             all_affordances = torch.unbind(model_output, dim=1)
             solid_map = all_affordances[AFFORDANCES.index('solid')]
             solid_map = torch.stack((solid_map, solid_map, solid_map), dim=1)
-            solid_map = TT.img_norm(solid_map)
+            solid_map = TT.img_norm(solid_map, range=(0.0, 1.0))
             viz_inputs.append(solid_map.cpu())
             # log.info(f"solid map: {solid_map.min()}, {solid_map.max()}, {torch.unique(solid_map)}")
             # viz_inputs.append(target)
@@ -221,17 +221,18 @@ class AffordanceUnetLightning(pl.LightningModule):
         for idx in rand_select:
             data = self.dataset[idx]
             image, target = data.image, data.target
-
+            
+            image = TT.img_norm(image)
             train_images.append(image)
             all_affordances = torch.unbind(target, dim=0)
             solid_map = all_affordances[AFFORDANCES.index('solid')]
             solid_map = torch.stack((solid_map, solid_map, solid_map), dim=0)
-            solid_map = TT.img_norm(solid_map)
+            solid_map = TT.img_norm(solid_map, range=(0.0,1.0))
             train_images.append(solid_map.float())
             # train_images.append(target)
 
         img_grid = make_grid(
-            train_images, nrow=6, padding=20, normalize=True)
+            train_images, nrow=6, padding=20)
         log.info(f"image grid shape : {img_grid.shape}, {type(img_grid)}")
         pil_grid = to_pil_image(img_grid)
         with tempfile.NamedTemporaryFile(prefix='sample_', suffix='.png') as filepath:

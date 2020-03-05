@@ -7,14 +7,14 @@ import torch
 import numpy as np
 import segmentation_transforms as TT
 
-# Expects directory of .png's as root
-# Transforms should include ToTensor (also probably Normalize)
-# Can apply different transform to output, returns image as input and label
-
 Sample = namedtuple('Sample', ['image', 'target'])
 
 class GameLevelsDataset(torch.utils.data.Dataset):
-    def __init__(self, root='./MM', transform=TT.ToTensor()):
+    """
+    Expects directory of .bmp's or .png's as root
+    Transform should include ToTensor (also probably Normalize)
+    """
+    def __init__(self, root='./MM', transform=TT.ToTensor(), patch_size=(240,256), preprocess=False):
         self.image_dir = os.path.join(root)
         # Get abs file paths
         img_filetype =  'bmp'
@@ -25,31 +25,39 @@ class GameLevelsDataset(torch.utils.data.Dataset):
             self.image_list = glob.glob(f'{self.image_dir}/*.png')
         
         self.data = []
-        TARGET_SIZE = 224
+        self.target_height, self.target_width = patch_size
         for i, filename in enumerate(self.image_list):
             image = Image.open(filename).convert('RGB')
+            file_with_ext = os.path.split(filename)[1]
+            basename = os.path.splitext(file_with_ext)[0]
             segmentation_filename = filename.replace(img_filetype, 'npy')
             affordance_map = np.load(segmentation_filename)
             print(image.size, affordance_map.shape)
             width, height = image.size
-            rows = int(height // TARGET_SIZE)
-            cols = int(width // TARGET_SIZE)
+            rows = int(height // self.target_height)
+            cols = int(width // self.target_width)
+            skip_ctr = 0
             ctr = 0
-            for (r,c) in [(r*TARGET_SIZE,c*TARGET_SIZE) for r in range(rows) for c in range(cols)]:
-                small_image = image.crop(box=(c, r, c + TARGET_SIZE, r + TARGET_SIZE))
+            for (r,c) in [(r*self.target_height,c*self.target_width) for r in range(rows) for c in range(cols)]:
+                small_image = image.crop(box=(c, r, c + self.target_width, r + self.target_height))
                 small_extrema = small_image.getextrema()
                 if small_image.getbbox():
-                    small_map = np.copy(affordance_map)[r:r+TARGET_SIZE, c:c+TARGET_SIZE, :]
+                    small_map = np.copy(affordance_map)[r:r+self.target_height, c:c+self.target_width, :]
                     self.data.append((small_image, small_map))
-                    if small_image.size != (224,224):
+                    # PIL image 'size' is (width, height) unlike numpy / pytorch standard
+                    if small_image.size != (self.target_width,self.target_height):
                         print(f'SMaLL IMAGE wRONG SIZE: {small_image.size}')
-                    if small_map.shape != (224,224,9):
+                    if small_map.shape != (self.target_height,self.target_width,9):
                         print(f"SMAL MAP WRONG SHAPE: {small_map.shape}")
-                    # small_image.save(f"./nonblack/{r}_{c}_{i}.png")
-                else:
+                    if preprocess:
+                        save_file_base = f"./Preprocessed/{basename}_{ctr}_{self.target_height}x{self.target_width}"
+                        small_image.save(f"{save_file_base}.png")
+                        np.save(f"{save_file_base}.npy", small_map)
                     ctr += 1
+                else:
+                    skip_ctr += 1
                     # small_image.save(f'./allblack/{r}_{c}_{i}.png')
-            print(f'{ctr} all black sections out of {rows * cols} = {rows} * {cols}. File: {filename}')
+            print(f'{skip_ctr} all single color sections out of {rows * cols} = {rows} * {cols}. File: {filename}')
         # self.image_folders = next(os.walk(self.image_dir))[1]
         self.length = len(self.data)
         self.transform = transform
@@ -66,13 +74,15 @@ class GameLevelsDataset(torch.utils.data.Dataset):
         # sample = {'image': image, 'target': target}
         return Sample(image, target)
 
-class GameImagesDataset(torch.utils.data.Dataset):
-    def __init__(self, root='/faim/datasets/per_game_screenshots/super_mario_bros_3_usa', transform=TT.ToTensor()):
+class AffordanceImagesDataset(torch.utils.data.Dataset):
+    """
+    Expects images to be .pngs in root folder, target affordance maps to be .npy files with same file name as image (without .png)
+    """
+    def __init__(self, root='./Preprocessed', transform=TT.ToTensor()):
         self.image_dir = os.path.join(root)
         # Get abs file paths
         self.image_list = glob.glob(f'{self.image_dir}/*.png')
 
-    
         # self.image_folders = next(os.walk(self.image_dir))[1]
         self.length = len(self.image_list)
         self.transform = transform
@@ -84,7 +94,8 @@ class GameImagesDataset(torch.utils.data.Dataset):
         screenshot_file = self.image_list[idx]
 
         image = Image.open(screenshot_file).convert('RGB')
-        target = image.copy()
+        segmentation_filename = screenshot_file.replace('png', 'npy')
+        target = np.load(segmentation_filename)
 
         if self.transform:
             image, target = self.transform(image, target)
@@ -97,6 +108,7 @@ def get_dataset(name, transform):
     paths = {
         "mm": ('./MM/', GameLevelsDataset),
         "test": ('./TST/', GameLevelsDataset),
+        "preprocessed": ('./Preprocessed', AffordanceImagesDataset)
     }
     root_path, dataset_function = paths[name]
 
@@ -106,7 +118,7 @@ def get_dataset(name, transform):
 def get_stats(name):
     datasets = {
         "smb": ([0.3711, 0.3652, 0.5469],[0.2973, 0.2772, 0.4554]),
-        "mm": ([0.19928, 0.3196, 0.3268], [0.34876, 0.3755, 0.4020])
+        "mm": ([0.3572203516960144, 0.5261361598968506, 0.533509373664856], [0.4059096872806549, 0.3465479016304016, 0.384729266166687])
     }
     try: 
         return datasets[name]
