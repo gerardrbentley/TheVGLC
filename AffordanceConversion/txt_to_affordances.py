@@ -46,7 +46,7 @@ def main(args):
             with open(file_path) as processed_level:
                 level_rows = [[char for char in line if char != '\n'] for line in processed_level]
         except:
-            print("Error loading affordance file or level map")
+            print("Error loading level map")
             return
         num_cols = len(level_rows[0])
         num_rows = len(level_rows)
@@ -78,6 +78,7 @@ def main(args):
             print(f"Num pixels per affordance: {buckets.tolist()}")
             print(AFFORDANCES)
             print(f"Total pixels {num_rows} rows, {num_cols} cols: (h*w) ({height} * {width}): {height*width}")
+            print(f'Affordance map shape (h,w,channels): {affordance_map.shape}')
         if not args.no_save:
             os.makedirs(args.dest, exist_ok=True)
             dest_file = os.path.join(args.dest, f"{basename}.npy")

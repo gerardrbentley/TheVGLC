@@ -22,6 +22,7 @@ from pytorch_lightning.logging import MLFlowLogger
 
 import segmentation_transforms as TT
 from models import get_model, UNetAuto
+from ml_args import parse_args
 
 from datasets import GameLevelsDataset, get_dataset, dataset_mean_std, get_stats
 
@@ -74,8 +75,8 @@ class AffordanceUnetLightning(pl.LightningModule):
         :param targets: ground truth image or segmentation map
         :param segmentations: output of the autoencoder network
         """
-        mse = F.binary_cross_entropy_with_logits(segmentations, targets)
-        return mse
+        bce_loss = F.binary_cross_entropy_with_logits(segmentations, targets)
+        return bce_loss
 
     def training_step(self, batch, batch_idx):
         """
@@ -111,12 +112,19 @@ class AffordanceUnetLightning(pl.LightningModule):
             image, target = self.val_dataset[idx]
             image, target = image.unsqueeze(0), target.unsqueeze(0)
             model_output = self.forward(image.to(curr_device))
-            # reconstruction = TT.img_norm(model_output)
-            viz_inputs.append(image)
-            viz_inputs.append(model_output.cpu())
-            viz_inputs.append(target)
 
-        img_grid = make_grid(torch.cat(viz_inputs), nrow=3, padding=40, normalize=True)
+            image = TT.img_norm(image)
+            viz_inputs.append(image)
+
+            all_affordances = torch.unbind(model_output, dim=1)
+            solid_map = all_affordances[AFFORDANCES.index('solid')]
+            solid_map = torch.stack((solid_map, solid_map, solid_map), dim=1)
+            solid_map = TT.img_norm(solid_map)
+            viz_inputs.append(solid_map.cpu())
+            # log.info(f"solid map: {solid_map.min()}, {solid_map.max()}, {torch.unique(solid_map)}")
+            # viz_inputs.append(target)
+
+        img_grid = make_grid(torch.cat(viz_inputs), nrow=2, padding=40)
         pil_grid = to_pil_image(img_grid)
         # log.info(img_grid.shape, torch.cat(viz_inputs).shape)
         filename = f"globalstep_{self.global_step:05d}_sample_outputs"
@@ -178,6 +186,7 @@ class AffordanceUnetLightning(pl.LightningModule):
         to_log = {'val_loss': avg_loss,
                 'max_val_loss': max_loss}
         output = {
+            'val_loss':avg_loss,
             'log': to_log
         }
         return output
@@ -199,9 +208,9 @@ class AffordanceUnetLightning(pl.LightningModule):
             lr=args.lr,
             momentum=args.momentum, weight_decay=args.weight_decay
         )
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer,
-            factor=0.1)
-        return [optimizer], [scheduler]
+        # scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer,
+        #     factor=0.1)
+        return optimizer
 
     @rank_zero_only
     def on_train_start(self):
@@ -214,10 +223,15 @@ class AffordanceUnetLightning(pl.LightningModule):
             image, target = data.image, data.target
 
             train_images.append(image)
-            train_images.append(target)
+            all_affordances = torch.unbind(target, dim=0)
+            solid_map = all_affordances[AFFORDANCES.index('solid')]
+            solid_map = torch.stack((solid_map, solid_map, solid_map), dim=0)
+            solid_map = TT.img_norm(solid_map)
+            train_images.append(solid_map.float())
+            # train_images.append(target)
 
         img_grid = make_grid(
-            train_images, nrow=6, padding=40, normalize=True)
+            train_images, nrow=6, padding=20, normalize=True)
         log.info(f"image grid shape : {img_grid.shape}, {type(img_grid)}")
         pil_grid = to_pil_image(img_grid)
         with tempfile.NamedTemporaryFile(prefix='sample_', suffix='.png') as filepath:
@@ -226,22 +240,12 @@ class AffordanceUnetLightning(pl.LightningModule):
 
     #Default mean and std are from super mario bros images
     def configure_transforms(self, mean=TT.DEFAULT_MEAN, std=TT.DEFAULT_STD):
-        if self.hparams.center_inpaint:
-            train_transform = TT.get_inpaint_transform(
-                train=True, mean=mean, std=std, cutout_pixels=60)
-            val_transform = TT.get_inpaint_transform(
-                train=False, mean=mean, std=std, cutout_pixels=60)
-        if self.hparams.noise:
-            train_transform = TT.get_noisy_transform(
-                train=True, mean=mean, std=std, noise_mean=0.0, noise_std=1.0)
-            val_transform = TT.get_noisy_transform(
-                train=False, mean=mean, std=std, noise_mean=0.0, noise_std=1.0)
-        else:
-            train_flag = not args.no_augmentation
-            train_transform = TT.get_transform(
-                train=train_flag, mean=mean, std=std)
-            val_transform = TT.get_transform(
-                train=False, mean=mean, std=std)
+        # train_flag = not args.no_augmentation
+        train_flag = False
+        train_transform = TT.get_transform(
+            train=train_flag, mean=mean, std=std)
+        val_transform = TT.get_transform(
+            train=False, mean=mean, std=std)
         return train_transform, val_transform
 
     def load_full_dataset(self):
@@ -253,7 +257,7 @@ class AffordanceUnetLightning(pl.LightningModule):
                     self.hparams.dataset, transform=TT.ToTensor())
                 self.mean, self.std = dataset_mean_std(temp_ds)
             else:
-                # Fetch stats based on dataset, defaults to super mario bros if not found
+                # Fetch stats based on dataset, defaults to megaman if not found
                 self.mean, self.std = get_stats(self.hparams.dataset)
             log.info(f"Dataset mean: {self.mean}, std: {self.std}")
             # Dataset Augmentations

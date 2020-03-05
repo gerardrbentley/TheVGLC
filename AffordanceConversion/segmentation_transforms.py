@@ -41,7 +41,7 @@ class RandomResize(object):
     def __call__(self, image, target):
         size = random.randint(self.min_size, self.max_size)
         image = F.resize(image, size)
-        target = F.resize(target, size)
+        # target = F.resize(target, size)
         return image, target
 
 
@@ -186,7 +186,8 @@ class CenterCrop(object):
 class ToTensor(object):
     def __call__(self, image, target):
         image = F.to_tensor(image)
-        target = F.to_tensor(target)
+        target = torch.from_numpy(target)
+        target = target.permute(2, 0, 1)
         return image, target
 
 class SingleToTensor(object):
@@ -197,18 +198,18 @@ class SingleToTensor(object):
 class ToPIL(object):
     def __call__(self, image, target):
         image = F.to_pil_image(image)
-        target = F.to_pil_image(target)
+        # target = F.to_pil_image(target)
         return image, target
 
 
 class Normalize(object):
     def __init__(self, mean, std):
         self.mean = mean
-        self.std = std
+        self.std = std 
 
     def __call__(self, image, target):
         image = F.normalize(image, mean=self.mean, std=self.std)
-        target = F.normalize(target, mean=self.mean, std=self.std)
+        # target = F.normalize(target, mean=self.mean, std=self.std)
         return image, target
 
 
@@ -251,7 +252,7 @@ def get_transform(train=False, mean=DEFAULT_MEAN, std=DEFAULT_STD):
 
         transforms.append(RandomCrop(CROP_SIZE))
 
-    transforms.append(Resize(BASE_SIZE))
+    # transforms.append(Resize(BASE_SIZE))
     transforms.append(ToTensor())
     transforms.append(Normalize(mean=mean,
                                   std=std))
