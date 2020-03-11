@@ -2,6 +2,7 @@ from torch import Tensor
 from PIL import Image
 import glob
 import os
+import argparse
 from collections import namedtuple
 import torch
 import numpy as np
@@ -14,7 +15,7 @@ class GameLevelsDataset(torch.utils.data.Dataset):
     Expects directory of .bmp's or .png's as root
     Transform should include ToTensor (also probably Normalize)
     """
-    def __init__(self, root='./MM', transform=TT.ToTensor(), patch_size=(240,256), preprocess=False):
+    def __init__(self, root='SMB', transform=TT.ToTensor(), patch_size=(240,256), preprocess=False):
         self.image_dir = os.path.join(root)
         # Get abs file paths
         img_filetype =  'bmp'
@@ -50,7 +51,7 @@ class GameLevelsDataset(torch.utils.data.Dataset):
                     if small_map.shape != (self.target_height,self.target_width,9):
                         print(f"SMAL MAP WRONG SHAPE: {small_map.shape}")
                     if preprocess:
-                        save_file_base = f"./Preprocessed/{basename}_{ctr}_{self.target_height}x{self.target_width}"
+                        save_file_base = f"./Preprocessed{root}/{basename}_{ctr}_{self.target_height}x{self.target_width}"
                         small_image.save(f"{save_file_base}.png")
                         np.save(f"{save_file_base}.npy", small_map)
                     ctr += 1
@@ -102,17 +103,52 @@ class AffordanceImagesDataset(torch.utils.data.Dataset):
 
         # sample = {'image': image, 'target': target}
         return Sample(image, target)
+        
+class SolidAffordanceDataset(torch.utils.data.Dataset):
+    """
+    Expects images to be .pngs in root folder, target affordance maps to be .npy files with same file name as image (without .png)
+    """
+    def __init__(self, root='./Preprocessed', transform=TT.ToTensor()):
+        self.image_dir = os.path.join(root)
+        # Get abs file paths
+        self.image_list = glob.glob(f'{self.image_dir}/*.png')
+
+        # self.image_folders = next(os.walk(self.image_dir))[1]
+        self.length = len(self.image_list)
+        self.transform = transform
+
+    def __len__(self):
+        return self.length
+
+    def __getitem__(self, idx):
+        screenshot_file = self.image_list[idx]
+
+        image = Image.open(screenshot_file).convert('RGB')
+        segmentation_filename = screenshot_file.replace('png', 'npy')
+        target = np.load(segmentation_filename)
+
+        if self.transform:
+            image, target = self.transform(image, target)
+
+        # sample = {'image': image, 'target': target}
+        return Sample(image, target[6,:,:].unsqueeze(0))
 
 
 def get_dataset(name, transform):
     paths = {
         "mm": ('./PreprocessedMM/', GameLevelsDataset),
+        "solidmm": ('./PreprocessedMM/', SolidAffordanceDataset),
+        "smb": ('SMB', GameLevelsDataset),
+        "preprocessedsmb": ('./PreprocessedSMB/', AffordanceImagesDataset),
+        "solidsmb": ('./PreprocessedSMB/', SolidAffordanceDataset),
         "ki": ('./PreprocessedKI/', AffordanceImagesDataset),
         "test": ('./TST/', GameLevelsDataset),
         "preprocessed": ('./Preprocessed', AffordanceImagesDataset)
     }
-    root_path, dataset_function = paths[name]
-
+    try:
+        root_path, dataset_function = paths[name.lower()]
+    except:
+        root_path, dataset_function = paths['smb']
     ds = dataset_function(root=root_path, transform=transform)
     return ds
 
@@ -159,10 +195,30 @@ def dataset_mean_std(dataset):
     std = torch.sqrt(var / (len(dataset)*h*w))
     return mean.tolist(), std.tolist()
 
-if __name__ == "__main__":
+def parse_args():
+    parser = argparse.ArgumentParser(description='Textrue match detection')
 
-    print('Preprocess KI Game Level Dataset')    
-    trainset = GameLevelsDataset("./KI", transform=None, preprocess=True)
+    parser.add_argument('--file', type=str, default='')
+    parser.add_argument('--json', type=str, default="./AffordanceConversion/smb_affordances.json")
+    parser.add_argument('--folder', type=str, default='')
+    parser.add_argument('--dest', type=str, default="./AffordanceConversion/SMB/")
+    parser.add_argument('--verbose', action='store_true')
+    parser.add_argument('--visualize', action='store_true')
+    parser.add_argument('--visualizeall', action='store_true')
+    parser.add_argument('--no-save', action='store_true')
+    parser.add_argument('--grid-size', type=int,
+                        default=16, help='grid square size')
+
+    args = parser.parse_args()
+
+    return args
+
+def main(args):
+    if args.folder == "":
+        print(f"Bad folder")
+        return
+    print(f'Preprocess {args.folder} Game Level Dataset')    
+    trainset = GameLevelsDataset(f"{args.folder}", transform=None, preprocess=True)
     print(type(trainset))
     print(f'len trainset: {len(trainset)}')
     data = trainset[1]
@@ -177,7 +233,7 @@ if __name__ == "__main__":
 
     print(f'--------------------------------------')
     # CHECK MEAN AND STD
-    tensorset = get_dataset("ki", transform=TT.ToTensor())
+    tensorset = get_dataset(f"{args.folder}", transform=TT.ToTensor())
     test_image = tensorset[0].image
     c,h,w = test_image.shape
     # print(f"c: {c}, h: {h}, w: {w}")
@@ -186,7 +242,7 @@ if __name__ == "__main__":
     print(f"test mean: {torch.mean(lin_image, 1)}")
     print(f"test std: {torch.std(lin_image, 1)}")
     mean, std = dataset_mean_std(tensorset)
-    print(f"ki dataset (mean, std): ({mean}, {std})")
+    print(f"{args.folder} dataset (mean, std): ({mean}, {std})")
     
     print(f'--------------------------------------')
     # smb = get_dataset("smb", transform=TT.ToTensor())
@@ -224,7 +280,7 @@ if __name__ == "__main__":
         f'ranges: [{image.min()} - {image.max()}], [{target.min()} - {target.max()}]')
 
     print(f'--------------------------------------')
-    preproc = get_dataset('preprocessed', transform=TT.ToTensor())
+    preproc = get_dataset(f"Preprocessed{args.folder}", transform=TT.ToTensor())
     print(type(preproc))
     print(f'len preproc: {len(preproc)}')
     data = preproc[1]
@@ -239,3 +295,8 @@ if __name__ == "__main__":
     print(f'extrema: [{image.min()}, {image.max()}], [{target.min()}, {target.max()}]')
     # visualize_outputs(image, titles=['Image'])
     print(f'--------------------------------------')
+
+
+if __name__ == "__main__":
+    args = parse_args()
+    main(args)

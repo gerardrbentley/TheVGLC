@@ -278,7 +278,7 @@ def get_inpaint_transform(train=False, mean=DEFAULT_MEAN, std=DEFAULT_STD, cutou
         transforms.append(RandomCrop(CROP_SIZE))
 
 
-    transforms.append(Resize(BASE_SIZE))
+    transforms.append(Resize((BASE_SIZE, BASE_SIZE)))
     transforms.append(CentralCutout(cutout_pixels))
 
     transforms.append(ToTensor())

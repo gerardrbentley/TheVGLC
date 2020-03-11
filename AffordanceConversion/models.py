@@ -104,9 +104,9 @@ class WNetOutputBlock(nn.Module):
 class UNetAuto(nn.Module):
     r"""UNet based architecture for image auto encoding"""
 
-    def __init__(self, num_channels: int = 3, num_out_channels: int = 3, max_features: int = 1024):
+    def __init__(self, num_in_channels: int = 3, num_out_channels: int = 3, max_features: int = 1024):
         r"""
-        :param num_channels: Number of channels in the raw image data
+        :param num_in_channels: Number of channels in the raw image data
         :param num_out_channels: Number of channels in the output data
         """
         super(UNetAuto, self).__init__()
@@ -118,7 +118,7 @@ class UNetAuto(nn.Module):
         features_2 = features_3 // 2
         features_1 = features_2 // 2
 
-        self.conv_block1 = WNetDownConvBlock(num_channels, features_1)
+        self.conv_block1 = WNetDownConvBlock(num_in_channels, features_1)
         self.conv_block2 = WNetDownConvBlock(features_1, features_2)
         self.conv_block3 = WNetDownConvBlock(features_2, features_3)
         self.conv_block4 = WNetDownConvBlock(features_3, features_4)

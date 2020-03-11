@@ -80,7 +80,10 @@ class AffordanceUnetLightning(pl.LightningModule):
         super(AffordanceUnetLightning, self).__init__()
         self.hparams = hparams
         self.dataset = None
-        self.net = UNetAuto(num_out_channels=len(AFFORDANCES), max_features=1024)
+        if self.hparams.solid_only:
+            self.net = UNetAuto(num_out_channels=1, max_features=512)
+        else:
+            self.net = UNetAuto(num_out_channels=len(AFFORDANCES), max_features=512)
 
     def forward(self, x):
         """
@@ -165,6 +168,8 @@ class AffordanceUnetLightning(pl.LightningModule):
         images, targets = batch
         predictions = self.forward(images)
         loss_val = self.loss(targets, predictions)
+        if batch_idx == 0 and self.trainer.root_gpu is not None and self.trainer.root_gpu == predictions.get_device():
+            self.log_validation_images(images, predictions, targets)
         to_log = {'val_loss': loss_val}
         output = {
             'val_loss': loss_val,
@@ -172,8 +177,8 @@ class AffordanceUnetLightning(pl.LightningModule):
         }
         return output
 
-    def validation_end(self, val_step_outputs):
-        log.info('Val end')
+    def validation_epoch_end(self, val_step_outputs):
+        # log.info('Val end')
         val_losses = torch.stack([x['val_loss'] for x in val_step_outputs])
         
         avg_loss = val_losses.mean()
@@ -210,57 +215,66 @@ class AffordanceUnetLightning(pl.LightningModule):
     @rank_zero_only
     def on_train_start(self):
         self.start_time = time.time()
-        # Add a training image and it's target to tensorboard
-        viz_idxs = torch.randint(0, len(self.dataset), (8,)).tolist()
+        if not self.hparams.solid_only:
+            # Add a training image and it's target to logs
+            viz_idxs = torch.randint(0, len(self.dataset), (8,)).tolist()
 
-        input_images = []
-        target_list = []
-        for idx in viz_idxs:
-            image, target = self.dataset[idx]
-            input_images.append(TT.img_norm(image))
-            target_list.append(target)
-        viz_inputs = torch.stack(input_images)
-        targets = torch.stack(target_list)
-        target_solid = get_normed_map('solid', targets)
-        target_danger = get_normed_map('dangerous', targets)
+            input_images = []
+            target_list = []
+            for idx in viz_idxs:
+                image, target = self.dataset[idx]
+                input_images.append(TT.img_norm(image))
+                target_list.append(target)
+            viz_inputs = torch.stack(input_images)
+            targets = torch.stack(target_list)
+            target_solid = get_normed_map('solid', targets)
+            target_danger = get_normed_map('dangerous', targets)
 
-        img_grid = make_grid(torch.cat([viz_inputs, target_solid, target_danger]), nrow=len(viz_idxs), padding=20)
-        # log.info(f"image grid shape : {img_grid.shape}, {type(img_grid)}")
-        pil_grid = to_pil_image(img_grid)
-        with tempfile.NamedTemporaryFile(prefix='sample_', suffix='.png') as filepath:
-            pil_grid.save(filepath)
-            self.logger.experiment.log_artifact(self.logger.run_id, filepath.name, 'pre_training')
+            img_grid = make_grid(torch.cat([viz_inputs, target_solid, target_danger]), nrow=len(viz_idxs), padding=20)
+            # log.info(f"image grid shape : {img_grid.shape}, {type(img_grid)}")
+            pil_grid = to_pil_image(img_grid)
+            with tempfile.NamedTemporaryFile(prefix='sample_', suffix='.png') as filepath:
+                pil_grid.save(filepath)
+                self.logger.experiment.log_artifact(self.logger.run_id, filepath.name, 'pre_training')
 
     @rank_zero_only
-    def on_epoch_end(self):
-        curr_device = next(self.net.parameters()).get_device()
-        viz_idxs = list(range(8))
+    def log_validation_images(self, inputs, predictions, targets):
+        # curr_device = next(self.net.parameters()).get_device()
+        # viz_idxs = list(range(8))
 
-        input_images = []
-        target_list = []
-        for idx in viz_idxs:
-            image, target = self.val_dataset[idx]
-            input_images.append(image)
-            target_list.append(target)
-        model_inputs = torch.stack(input_images, dim=0)
-        input_images = [TT.img_norm(image) for image in input_images]
-        viz_inputs = torch.stack(input_images, dim=0)
+        # input_images = []
+        # target_list = []
+        # for idx in viz_idxs:
+        #     image, target = self.val_dataset[idx]
+        #     input_images.append(image)
+        #     target_list.append(target)
+        # model_inputs = torch.stack(input_images, dim=0)
+        # input_images = [TT.img_norm(image) for image in input_images]
+        # viz_inputs = torch.stack(input_images, dim=0)
 
-        model_outputs = self.forward(model_inputs.to(curr_device))
-        model_outputs = model_outputs.cpu()
+        # model_outputs = self.forward(model_inputs.to(curr_device))
+        # model_outputs = model_outputs.cpu()
         
-        targets = torch.stack(target_list, dim=0)
-        pred_solid, target_solid = get_normed_map('solid', model_outputs, targets)
-        pred_danger, target_danger = get_normed_map('dangerous', model_outputs, targets)
+        # targets = torch.stack(target_list, dim=0)
+        # pred_solid, target_solid = get_normed_map('solid', model_outputs, targets)
+        # pred_danger, target_danger = get_normed_map('dangerous', model_outputs, targets)
 
-        img_grid = make_grid(torch.cat([viz_inputs, pred_solid, target_solid, pred_danger, target_danger]), nrow=len(viz_idxs), padding=20)
-        pil_grid = to_pil_image(img_grid)
+        # img_grid = make_grid(torch.cat([viz_inputs, pred_solid, target_solid, pred_danger, target_danger]), nrow=len(viz_idxs), padding=20)
+        viz_inputs = TT.img_norm(inputs)
+        model_outputs = TT.img_norm(predictions, range=(0.0,1.0))
+        viz_targets = TT.img_norm(targets, range=(0.0,1.0))
+        # pri /nt(viz_inputs.shape, model_outputs.shape, viz_targets.shape)
+        model_outputs = torch.cat((model_outputs, model_outputs, model_outputs), dim=1)
+        viz_targets = torch.cat((viz_targets, viz_targets, viz_targets), dim=1)
+        # print(viz_inputs.shape, model_outputs.shape, viz_targets.shape)
+        
+        img_grid = make_grid(torch.cat([viz_inputs, model_outputs, viz_targets]), nrow=inputs.shape[0], padding=20)
+        pil_grid = to_pil_image(img_grid.cpu())
         # log.info(img_grid.shape, torch.cat(viz_inputs).shape)
         filename = f"globalstep_{self.global_step:05d}_sample_outputs"
         with tempfile.NamedTemporaryFile(prefix=filename, suffix='.png') as filepath:
             pil_grid.save(filepath)
             self.logger.experiment.log_artifact(self.logger.run_id, filepath.name, 'eval_images')
-
 
     #Default mean and std are from super mario bros images
     def configure_transforms(self, mean=TT.DEFAULT_MEAN, std=TT.DEFAULT_STD):
@@ -272,49 +286,48 @@ class AffordanceUnetLightning(pl.LightningModule):
             train=False, mean=mean, std=std)
         return train_transform, val_transform
 
-    def load_full_dataset(self):
-        if self.dataset is None:
-            # Dataset Mean and Std
-            if self.hparams.dataset_mean:
-                log.info('Calculating dataset mean')
-                temp_ds = get_dataset(
-                    self.hparams.dataset, transform=TT.ToTensor())
-                self.mean, self.std = dataset_mean_std(temp_ds)
-            else:
-                # Fetch stats based on dataset, defaults to megaman if not found
-                self.mean, self.std = get_stats(self.hparams.dataset)
-            log.info(f"Dataset mean: {self.mean}, std: {self.std}")
-            # Dataset Augmentations
-            train_transform, val_transform = self.configure_transforms(mean=self.mean, std=self.std)
+    def prepare_data(self):
+        # Dataset Mean and Std
+        if self.hparams.dataset_mean:
+            log.info('Calculating dataset mean')
+            temp_ds = get_dataset(
+                self.hparams.dataset, transform=TT.ToTensor())
+            self.mean, self.std = dataset_mean_std(temp_ds)
+        else:
+            # Fetch stats based on dataset, defaults to megaman if not found
+            self.mean, self.std = get_stats(self.hparams.dataset)
+        log.info(f"Dataset mean: {self.mean}, std: {self.std}")
+        # Dataset Augmentations
+        train_transform, val_transform = self.configure_transforms(mean=self.mean, std=self.std)
 
-            self.dataset = get_dataset(
-                self.hparams.dataset, transform=train_transform)
+        self.dataset = get_dataset(
+            self.hparams.dataset, transform=train_transform)
 
-            self.val_dataset = get_dataset(
-                self.hparams.dataset, transform=val_transform)
+        self.val_dataset = get_dataset(
+            self.hparams.dataset, transform=val_transform)
 
-            num_samples = len(self.dataset)
-            num_train = int(0.8 * num_samples)
-            indices = torch.randperm(num_samples).tolist()
-            self.dataset = torch.utils.data.Subset(
-                self.dataset, indices[0:num_train])
-            self.val_dataset = torch.utils.data.Subset(
-                self.val_dataset, indices[num_train:])
-            log.info(f'Full Dataset loaded: len: {num_samples}')
-            # self.train_split, self.val_split = torch.utils.data.random_split(
-            #     self.dataset, (num_train, num_samples - num_train))
-            log.info(
-                f'Train {len(self.dataset)} and Val {len(self.val_dataset)} splits made')
+        num_samples = len(self.dataset)
+        num_train = int(0.8 * num_samples)
+        indices = torch.randperm(num_samples).tolist()
+        self.dataset = torch.utils.data.Subset(
+            self.dataset, indices[0:num_train])
+        self.val_dataset = torch.utils.data.Subset(
+            self.val_dataset, indices[num_train:])
+        log.info(f'Full Dataset loaded: len: {num_samples}')
+        # self.train_split, self.val_split = torch.utils.data.random_split(
+        #     self.dataset, (num_train, num_samples - num_train))
+        log.info(
+            f'Train {len(self.dataset)} and Val {len(self.val_dataset)} splits made')
 
-            # Distributed Data Parallel mode chunks the dataset so that each worker does equal work but doesn't do extra work
-            if self.use_ddp:
-                self.train_sampler = torch.utils.data.distributed.DistributedSampler(
-                    self.dataset)
-                self.val_sampler = torch.utils.data.distributed.DistributedSampler(
-                    self.val_dataset)
-            else:
-                self.train_sampler = torch.utils.data.RandomSampler(self.dataset)
-                self.val_sampler = torch.utils.data.SequentialSampler(self.val_dataset)
+        # Distributed Data Parallel mode chunks the dataset so that each worker does equal work but doesn't do extra work
+        # if self.use_ddp:
+        #     self.train_sampler = torch.utils.data.distributed.DistributedSampler(
+        #         self.dataset)
+        #     self.val_sampler = torch.utils.data.distributed.DistributedSampler(
+        #         self.val_dataset)
+        # else:
+        #     self.train_sampler = torch.utils.data.RandomSampler(self.dataset)
+        #     self.val_sampler = torch.utils.data.SequentialSampler(self.val_dataset)
 
 
     @pl.data_loader
@@ -323,8 +336,8 @@ class AffordanceUnetLightning(pl.LightningModule):
         Required
         """
         log.info('Training data loader called.')
-        self.load_full_dataset()
-        return torch.utils.data.DataLoader(self.dataset, sampler=self.train_sampler, 
+        # self.load_full_dataset()
+        return torch.utils.data.DataLoader(self.dataset, num_workers=16, 
             batch_size=self.hparams.batch_size, drop_last=True)
 
     @pl.data_loader
@@ -333,9 +346,9 @@ class AffordanceUnetLightning(pl.LightningModule):
         Optional
         """
         log.info('Validation data loader called.')
-        self.load_full_dataset()
-        return torch.utils.data.DataLoader(self.val_dataset, sampler=self.val_sampler, 
-            batch_size=self.hparams.batch_size, drop_last=False)
+        # self.load_full_dataset()
+        return torch.utils.data.DataLoader(self.val_dataset, num_workers=16, 
+            batch_size=self.hparams.batch_size, drop_last=True)
 
     # @pl.data_loader
     # def test_dataloader(self):
@@ -381,6 +394,9 @@ def main(args):
         checkpoint_callback=checkpoint_callback,
         accumulate_grad_batches=args.accumulations,
         fast_dev_run=args.fast_run,
+        profiler=True,
+        weights_summary='top',
+        max_epochs=100
     )
     trainer.fit(model)
 

@@ -7,7 +7,7 @@ def parse_args(get_parser=False):
 
     # Data and Model
     parser.add_argument('-d', '--dataset', default='preprocessed', help='dataset')
-    parser.add_argument('-m', '--model', default='unet1024', help='model')
+    parser.add_argument('-m', '--model', default='unet512', help='model')
     parser.add_argument('--device', default='cuda', help='device')
     parser.add_argument('-j', '--workers', default=16, type=int, metavar='N',
                         help='number of data loading workers (default: 16)')
@@ -22,8 +22,8 @@ def parse_args(get_parser=False):
         action="store_true",
     )
     parser.add_argument(
-        "--center-inpaint",
-        dest="center_inpaint",
+        "--solid-only",
+        dest="solid_only",
         help="Cut out central region of input image",
         action="store_true",
     )
@@ -35,7 +35,7 @@ def parse_args(get_parser=False):
     )
 
     # Hyper Parameters
-    parser.add_argument('-b', '--batch-size', default=8, type=int)
+    parser.add_argument('-b', '--batch-size', default=32, type=int)
     parser.add_argument('-a', '--accumulations', default=1, type=int,
                         help='number of batches to accumulate per backwards pass. Effectively increase batch-size')
     parser.add_argument('-e', '--epochs', default=50, type=int, metavar='N',
@@ -103,7 +103,7 @@ def parse_args(get_parser=False):
                         help='number of distributed processes')
     parser.add_argument('--dist-url', default='env://',
                         help='url used to set up distributed training')
-    parser.add_argument('--backend', default='ddp',
+    parser.add_argument('--backend', default='dp',
                         help='data parallel (dp), per-gpu model parallel (ddp) [default], per-node data parallel (ddp2) [requires SLURM_LOCALID]')
     if get_parser:
         return parser
